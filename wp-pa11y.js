@@ -1,23 +1,40 @@
 #!/usr/bin/env node
 
-const cli = require( "pa11y-reporter-cli" );
-const fetch = require( "node-fetch" );
-const fs = require( "fs" );
-const htmlReporter = require( "pa11y-reporter-html" );
-const https = require( "https" );
-const pa11y = require( "pa11y" );
-const path = require( "path" );
-const puppeteer = require( "puppeteer" );
-const xml2js = require( "xml2js" );
-const { program, Option } = require( "commander" );
+import * as pa11yReporterCli from 'pa11y/lib/reporters/cli.js';
+import fetch from "node-fetch";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import * as pa11yReporterHtml from "pa11y-reporter-html";
+import { Agent } from "https";
+import pa11y from "pa11y";
+import path from "path";
+import * as puppeteer from "puppeteer";
+import { Parser } from "xml2js";
+import { Option, program } from "commander";
+import { cwd } from 'process';
+import { cosmiconfigSync, defaultLoaders } from "cosmiconfig";
+import * as url from 'url'
+
+// Hack to set __dirname in ES module scope
+const __dirname = url.fileURLToPath( new URL( '.', import.meta.url ) );
 
 // Configuration.
-const outputDir = path.resolve( __dirname, "output" );
-const pkg = require( "./package.json" );
-const name = "wp-pa11y";
-const version = pkg.version || "0.0.0";
+const outputDir = path.resolve( cwd(), "output" );
+const packageJson = JSON.parse( readFileSync( path.resolve( __dirname, 'package.json' ), 'utf-8' ) );
+const name = packageJson.name || "wp-pa11y";
+const version = packageJson.version || "0.0.0";
 
-const { cosmiconfigSync, defaultLoaders } = require( "cosmiconfig" );
+program
+    .name( name )
+    .version( version, "-v, --version", "output the current version" )
+    .addOption(
+        new Option( "-o, --output <type>", "output type" )
+            .choices( [ "console", "html" ] )
+            .default( "console" )
+            .env( "WP_PA11Y_OUTPUT" )
+    )
+    .option( "-d, --destination <path>", "Output destination", outputDir )
+    .option( "-s, --sitemaps <sitemap urls...>", "specify one or more sitemaps for manual runs" );
+
 
 const cosmicConfig = cosmiconfigSync( name, {
     searchPlaces: [
@@ -32,26 +49,16 @@ const searchedFor = cosmicConfig.search();
 
 if ( searchedFor === null || searchedFor.isEmpty ) {
     console.error( "Could not find configuration. Please check docs and try again." );
-    process.exit( 1 );
+    program.help();
 }
 
 const config = cosmicConfig.load( searchedFor.filepath );
-
-program
-    .version( version, "-v, --version", "output the current version" )
-    .addOption(
-        new Option( "-o, --output <type>", "output type" )
-            .choices( [ "console", "html" ] )
-            .default( "console" )
-            .env( "WP_PA11Y_OUTPUT" )
-    )
-    .option( "-s, --sitemaps [sitemap urls...]", "specify one or more sitemaps for manual runs" );
 
 program.parse();
 
 const opts = program.opts();
 
-const reportType = opts.output || 'console';
+const reportType = program.getOptionValue( 'output' );
 let sitemaps = config.config;
 
 if ( sitemaps instanceof String || ! ( sitemaps instanceof Array ) ) {
@@ -82,10 +89,10 @@ sitemaps.forEach( async ( url ) => {
         .replace( "www.", "" )
         .replace( ".", "" );
 
-    const dir = path.resolve(outputDir, folderName);
+    const dir = path.resolve( outputDir, folderName );
 
-    if ( ! fs.existsSync( dir ) && reportType === "html" ) {
-        fs.mkdirSync( dir, { recursive: true } );
+    if ( ! existsSync( dir ) && reportType === "html" ) {
+        mkdirSync( dir, { recursive: true } );
     }
 
     const urlList = await getUrls( url );
@@ -107,22 +114,20 @@ sitemaps.forEach( async ( url ) => {
  */
 async function getUrls( url ) {
     // Bypass self-signed cert
-    const httpsAgent = new https.Agent( {
+    const httpsAgent = new Agent( {
         rejectUnauthorized: false
     } );
 
     const response = await fetch( url, { method: "GET", agent: httpsAgent } );
     const content = await response.text();
-    const parser = new xml2js.Parser();
+    const parser = new Parser();
     const data = await parser.parseStringPromise( content );
 
-    return new Promise( ( resolve ) => {
-        resolve(
-            data.urlset.url.length
-                ? data.urlset.url.map( ( link ) => link.loc[ 0 ] )
-                : []
-        );
-    } );
+    return Promise.resolve(
+        data.urlset.url.length
+            ? data.urlset.url.map( ( link ) => link.loc[ 0 ] )
+            : []
+    );
 }
 
 /**
@@ -134,6 +139,14 @@ async function getUrls( url ) {
 async function runPa11y( urlObj ) {
     let browser;
     let pages = [];
+
+    async function writeResultsHtml( results, i, urlList, folderName ) {
+        const htmlResults = await pa11yReporterHtml.results( results[ i ] );
+        const fileName = getFileName( urlList[ i ] );
+        const htmlOutput = path.resolve( outputDir, folderName, fileName );
+
+        writeFileSync( htmlOutput, htmlResults );
+    }
 
     try {
         const options = {
@@ -160,15 +173,10 @@ async function runPa11y( urlObj ) {
             } );
 
             if ( reportType === "html" ) {
-                const htmlResults = await htmlReporter.results( results[ i ] );
-                const fileName = getFileName( urlList[ i ] );
-
-                const htmlOutput = path.resolve(outputDir, folderName, fileName);
-
-                fs.writeFileSync( htmlOutput, htmlResults );
+                await writeResultsHtml( results, i, urlList, folderName );
             }
             else {
-                console.log( cli.results( results[ i ] ) );
+                console.log( pa11yReporterCli.results( results[ i ] ) );
             }
         }
 
