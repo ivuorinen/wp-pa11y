@@ -14,7 +14,7 @@
   "dependencies": {
     "commander": "^9.5.0",
     "cosmiconfig": "^7.0.1",
-    "node-fetch": "^2.6.7",
+    "node-fetch": "^2.6.9",
     "pa11y": "^6.1.1",
     "pa11y-reporter-cli": "^2.0.1",
     "pa11y-reporter-html": "^2.0.0",
