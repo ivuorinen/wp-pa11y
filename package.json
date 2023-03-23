@@ -15,7 +15,7 @@
     "commander": "^9.1.0",
     "cosmiconfig": "^7.0.1",
     "node-fetch": "^2.6.7",
-    "pa11y": "^6.1.1",
+    "pa11y": "^6.2.3",
     "pa11y-reporter-cli": "^2.0.0",
     "pa11y-reporter-html": "^2.0.0",
     "puppeteer": "^13.5.1",
