@@ -15,7 +15,7 @@
     "dependencies": {
         "commander": "^9.5.0",
         "cosmiconfig": "^8.0.0",
-        "fast-xml-parser": "^4.2.2",
+        "fast-xml-parser": "^4.2.4",
         "node-fetch": "^2.6.7",
         "pa11y": "^6.2.3",
         "puppeteer": "^19.10.0",
