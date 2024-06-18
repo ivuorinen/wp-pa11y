@@ -3,16 +3,16 @@
 const fetch = require("node-fetch");
 const fs = require("fs");
 const https = require("https");
+const http = require("http");
 const pa11y = require("pa11y");
-const htmlReporter = require('pa11y/lib/reporters/html');
-const cliReporter = require('pa11y/lib/reporters/cli');
+const htmlReporter = require("pa11y/lib/reporters/html");
+const cliReporter = require("pa11y/lib/reporters/cli");
 const path = require("path");
 const puppeteer = require("puppeteer");
 const { XMLParser } = require("fast-xml-parser");
 const { program, Option } = require("commander");
 
 // Configuration.
-const outputDir = path.resolve(__dirname, "output");
 const pkg = require("./package.json");
 const name = "wp-pa11y";
 const version = pkg.version || "0.0.0";
@@ -30,6 +30,13 @@ if (searchedFor === null || searchedFor.isEmpty) {
         "Could not find configuration. Please check docs and try again."
     );
     process.exit(1);
+}
+
+// Create base folder for reports to same path as config file.
+const configDir = path.dirname(searchedFor.filepath);
+const outputDir = path.resolve(configDir, `.${name}`);
+if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir);
 }
 
 const config = cosmicConfig.load(searchedFor.filepath);
@@ -84,12 +91,26 @@ configs.forEach(async (item) => {
  * @returns {Promise}
  */
 async function getUrls(url) {
-    // Bypass self-signed cert
+
+    // Bypass self-signed cert.
     const httpsAgent = new https.Agent({
         rejectUnauthorized: false,
     });
 
-    const response = await fetch(url, { method: "GET", agent: httpsAgent });
+    const httpAgent = new http.Agent();
+
+    const fetchOptions = {
+        method: "GET",
+        agent(_parsedURL) {
+            // Determine agent based on protocol.
+            if (_parsedURL.protocol === 'http:') {
+                return httpAgent;
+            }
+            return httpsAgent;
+        },
+    };
+
+    const response = await fetch(url, fetchOptions);
     const content = await response.text();
     const parser = new XMLParser();
     const data = parser.parse(content);
@@ -122,7 +143,11 @@ async function runPa11y(urlObj, config) {
 
         browser = await puppeteer.launch();
         const results = [];
+        const issueHashes = [];
         const { folderName, urlList } = urlObj;
+        const date = getTimestamp();
+        const summaryFileName = `${date}-${folderName}-summary.html`;
+        let summaryResults = {};
 
         for (let i = 0; i < urlList.length; i++) {
             pages.push(await browser.newPage());
@@ -135,22 +160,56 @@ async function runPa11y(urlObj, config) {
                 runners: options.runners,
             });
 
+            if (i === 0) {
+                summaryResults = results[i];
+                summaryResults.issues = [];
+            }
+
             if (results[i].issues.length > 0) {
+                // Push only fully unique issues to summary results.
+                results[i].issues.forEach((issue) => {
+                    const issueHash = `${issue.runner}/${issue.code}/${issue.selector}`;
+                    if (!issueHashes.includes(issueHash)) {
+                        issueHashes.push(issueHash);
+                        summaryResults.issues.push(issue);
+                    }
+                });
                 if (reportType === "html") {
-                    const htmlResults = await htmlReporter.results(results[i]);
-                    const fileName = getFileName(urlList[i]);
+                    // Write both page-specific and summary results to HTML files.
+                    // This allows providing a summary even if the execution is stopped.
+                    const resultObjects = [
+                        {
+                            fileName: summaryFileName,
+                            results: summaryResults,
+                        },
+                        {
+                            fileName: getFileName(urlList[i]),
+                            results: results[i],
+                        },
+                    ];
+                    for (const resultObject of resultObjects) {
+                        const htmlResults = await htmlReporter.results(
+                            resultObject.results
+                        );
 
-                    const htmlOutput = path.resolve(
-                        outputDir,
-                        folderName,
-                        fileName
-                    );
+                        const htmlOutput = path.resolve(
+                            outputDir,
+                            folderName,
+                            resultObject.fileName
+                        );
 
-                    fs.writeFileSync(htmlOutput, htmlResults);
+                        fs.writeFileSync(htmlOutput, htmlResults);
+                    }
                 } else {
                     console.log(cliReporter.results(results[i]));
                 }
             }
+        }
+
+        if (reportType === "console") {
+            // Write summary object to CLI.
+            console.log("Printing summary results of all issues...");
+            console.log(cliReporter.results(summaryResults));
         }
 
         for (const page of pages) {
@@ -177,9 +236,16 @@ function getFileName(url) {
         .replace(/^-+|-+$/g, "")
         .replace("httpswww", "");
 
-    const dt = new Date();
+    const date = getTimestamp();
 
-    return `${dt.getFullYear()}-${
-        dt.getMonth() + 1
-    }-${dt.getDate()}-${fileName}.html`;
+    return `${date}-${fileName}.html`;
+}
+
+/**
+ * Get current timestamp as a string for file names.
+ * @return {string}
+ */
+function getTimestamp() {
+    const dt = new Date();
+    return `${dt.getFullYear()}-${dt.getMonth() + 1}-${dt.getDate()}`;
 }
